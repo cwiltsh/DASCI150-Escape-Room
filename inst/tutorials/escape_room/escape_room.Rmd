@@ -8,9 +8,7 @@ runtime: shiny_prerendered
 ---
 
 ```{r setup, include=FALSE}
-library(learnr)
-library(gradethis)
-library(tidyverse)
+pacman::p_load(learnr, gradethis, tidyverse)
 # NOTE: readxl is deliberately NOT attached here. Room 1 has a bug that depends on it.
 
 gradethis_setup()
