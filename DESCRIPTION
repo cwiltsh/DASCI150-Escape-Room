@@ -10,4 +10,7 @@ Depends: R (>= 4.1.0)
 Imports:
     learnr,
     rmarkdown,
-    shiny
+    shiny,
+    gradethis
+Remotes:
+    rstudio/gradethis
