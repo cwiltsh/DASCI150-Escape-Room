@@ -1,0 +1,13 @@
+Package: DASCI150EscapeRoom
+Title: DASCI 150 Escape Room Tutorial
+Version: 0.1.0
+Authors@R: person("Charis", "Wiltshire", role = c("aut", "cre"))
+Description: An interactive learnr tutorial for the DASCI 150
+    escape room activity.
+License: MIT + file LICENSE
+Encoding: UTF-8
+Depends: R (>= 4.1.0)
+Imports:
+    learnr,
+    rmarkdown,
+    shiny
