@@ -1,0 +1,667 @@
+---
+title: "Escape Room: The Obesity & Diabetes Data Lab"
+output:
+  learnr::tutorial:
+    progressive: true
+    allow_skip: false
+runtime: shiny_prerendered
+---
+
+```{r setup, include=FALSE}
+library(learnr)
+library(gradethis)
+library(tidyverse)
+# NOTE: readxl is deliberately NOT attached here. Room 1 has a bug that depends on it.
+
+gradethis_setup()
+
+# ------------------------------------------------------------------------------
+# DATA FILE
+# Put obesity_diabetes.xlsx in the same folder as this .Rmd.
+# If it is missing, a stand-in file with the same six columns is created so the
+# tutorial still runs (for testing only; the passcodes depend on the data used).
+# ------------------------------------------------------------------------------
+ob_file <- "obesity_diabetes.xlsx"
+if (!file.exists(ob_file)) {
+  set.seed(42)
+  reg   <- c(as.character(state.region), "South")
+  reg[reg == "North Central"] <- "Midwest"
+  base  <- unname(c(Northeast = 29, Midwest = 32, South = 33, West = 27)[reg])
+  obes  <- round(base + rnorm(51, 0, 2.5), 1)
+  diab  <- round(4 + 0.20 * obes + rnorm(51, 0, 0.8), 1)
+  pop   <- round(c(unname(state.x77[, "Population"]) * 1000, 690000))
+  writexl::write_xlsx(
+    tibble(state = c(state.name, "District of Columbia"), ab = c(state.abb, "DC"),
+           diab = diab, obes = obes, region = reg, pop = pop),
+    ob_file
+  )
+  message("obesity_diabetes.xlsx not found: created a STAND-IN file for testing.")
+}
+
+# ------------------------------------------------------------------------------
+# "TRUTH" OBJECTS AND PASSCODES (computed from the data; used only for grading)
+# ------------------------------------------------------------------------------
+ob_truth <- readxl::read_excel(ob_file)
+stopifnot(all(c("state", "ab", "diab", "obes", "region", "pop") %in% names(ob_truth)))
+stopifnot("Rooms 2 assumes region contains 'South' and 'West'. Edit the labels if yours differ." =
+            all(c("South", "West") %in% ob_truth$region))
+if (max(ob_truth$obes) < 1) warning("obes looks like a proportion; the 25/30 cutoffs assume percentages.")
+
+ob2_truth <- ob_truth |>
+  mutate(
+    ratio     = diab / obes,
+    obese_pop = pop * obes / 100,
+    obes_cat  = case_when(obes < 25 ~ "Low", obes < 30 ~ "Medium", obes >= 30 ~ "High"),
+    diab_flag = case_when(diab > median(diab) ~ "Above median", TRUE ~ "At or below median")
+  )
+
+region_summary_truth <- ob2_truth |>
+  group_by(region) |>
+  summarize(avg_obes = mean(obes), avg_diab = mean(diab), n_states = n())
+region_wtd_truth <- ob2_truth |>
+  group_by(region) |>
+  summarize(wtd_obes = weighted.mean(obes, pop))
+region_pop_truth <- ob2_truth |>
+  group_by(region) |>
+  summarize(total_pop = sum(pop)) |>
+  mutate(share = total_pop / sum(total_pop))
+
+state_info_dup <- tibble(                                  # the (messy) lookup table used in Room 6
+  state_abbr = c("CA", "CA", "TX", "FL", "NY", "CO", "MS", "PR"),
+  coastal    = c(TRUE, TRUE, TRUE, TRUE, TRUE, FALSE, TRUE, TRUE)
+)
+state_info_truth <- distinct(state_info_dup)
+ob_joined_truth  <- left_join(ob2_truth, state_info_truth, by = c("ab" = "state_abbr"))
+
+ob_long_truth <- pivot_longer(ob_truth, cols = c(diab, obes),
+                              names_to = "measure", values_to = "rate")
+region_wide_truth <- ob_long_truth |>
+  group_by(region, measure) |>
+  summarize(avg = mean(rate), .groups = "drop") |>
+  pivot_wider(names_from = measure, values_from = avg)
+
+code1    <- nrow(ob_truth) * ncol(ob_truth)
+code2    <- ob_truth |> filter(obes > median(obes) & diab > median(diab)) |> nrow()
+code2_or <- ob_truth |> filter(obes > median(obes) | diab > median(diab)) |> nrow()
+code3    <- ob_truth |> arrange(desc(obes)) |> slice_head(n = 1) |> pull(ab)
+code4    <- sum(ob2_truth$obes_cat == "High")
+code5    <- region_wtd_truth |> slice_max(wtd_obes, n = 1) |> pull(region)
+code6    <- sum(ob_joined_truth$coastal, na.rm = TRUE)
+code7    <- nrow(ob_long_truth) + sum(ob_long_truth$measure == "obes" & ob_long_truth$rate > 30)
+code8    <- round(max(region_wide_truth$obes), 1)
+code9    <- region_summary_truth |> slice_max(avg_obes, n = 1) |> pull(region)
+
+same <- function(a, b) isTRUE(all.equal(a, b))
+
+# Builds a text-entry "keypad" whose answer is the passcode (case-insensitive, whitespace-trimmed)
+passcode_q <- function(prompt, code, extra = NULL) {
+  vals    <- unique(c(as.character(code), tolower(as.character(code)),
+                      toupper(as.character(code)), extra))
+  answers <- lapply(vals, function(v) answer(v, correct = TRUE))
+  do.call(question_text, c(
+    list(prompt), answers,
+    list(correct = "🔓 **Click.** The lock opens. Press Continue to enter the next room.",
+         incorrect = "🚨 **ACCESS DENIED.** That is not the passcode. Re-read your code's output and try again.",
+         allow_retry = TRUE, placeholder = "Enter passcode...")
+  ))
+}
+```
+
+## 🔒 The Escape Room
+
+### 🚨 Lockdown
+
+It is 3:07 a.m. at the State Health Surveillance Lab. The doors have sealed, the lights are red, and the only terminal still running holds a dataset of **obesity and diabetes rates for all 50 states plus DC**.
+
+Every door has a lock. Every lock has a **passcode**. And every passcode is hidden in some code that someone has **sabotaged**.
+
+**How to play**
+
+- Each room contains a script with **bugs**. Some crash loudly. Others run fine but give the **wrong answer**, so always check that each result matches its `GOAL` comment.
+- Fix the code, press **Run Code**, then press **Submit Answer** to be graded.
+- The last line of each script prints the room's **passcode**. Type it into the keypad to unlock the next room.
+- You cannot skip ahead. Rooms unlock in order, so fix them in order.
+- Stuck? Use the **Hint** button. Use hints before you ask for help.
+
+The dataset is `obesity_diabetes.xlsx` (51 rows, 6 columns):
+
+| column | meaning |
+|---|---|
+| `state` | state name |
+| `ab` | two-letter abbreviation |
+| `diab` | diabetes prevalence |
+| `obes` | obesity prevalence |
+| `region` | region of the US |
+| `pop` | population |
+
+Ready? Press **Continue**.
+
+### 🚪 Room 1: The Loading Dock *(3 bugs)*
+
+The data hasn't been loaded and the terminal is already complaining. Fix the loading script.
+
+```{r room1-setup, include=FALSE}
+if ("package:readxl" %in% search()) detach("package:readxl", unload = FALSE)
+```
+
+```{r room1, exercise=TRUE, exercise.setup="room1-setup", exercise.lines=16}
+# GOAL 1: read the Excel file into an object called `ob`
+ob <- read_excel("obesity_diabetes.xlsx")
+
+# GOAL 2: take a first look at the data -- the data should contain all 50 states plus DC
+glimpse(Ob)
+
+# PASSCODE: rows x columns
+nrow(ob) * ncol(ob)
+```
+
+<div id="room1-hint-1">
+**Hint 1:** The tidyverse installs `readxl` but does not *attach* it. What do you have to run before `read_excel()` exists? Also, R is case-sensitive.
+</div>
+
+<div id="room1-hint-2">
+**Hint 2:** How many "states" are in 50 states plus DC?
+</div>
+
+```{r room1-check}
+grade_this({
+  pass_if(same(.result, code1),
+          "🔓 The terminal boots. Your last line printed the passcode: enter it below.")
+  fail("That is not the passcode. Make sure `ob` loaded, all three goals run without errors, and the last line multiplies rows by columns.")
+})
+```
+
+```{r room1-lock}
+passcode_q("**Door 1 keypad.** Enter the passcode your code printed:", code1)
+```
+
+### 🚪 Room 2: The Filter Vault *(4 bugs)*
+
+The vault only opens for states that meet very specific criteria. Fix the `filter()` and `select()` calls.
+
+```{r room2-setup, include=FALSE}
+ob <- ob_truth
+```
+
+```{r room2, exercise=TRUE, exercise.setup="room2-setup", exercise.lines=22}
+# 2a GOAL: states with above-average obesity
+high_obes <- filter(ob, obes = mean(obes))
+
+# 2b GOAL: states in the South or West with above-median population
+south_west <- filter(ob, region == "South" | "West", pop > median(pop))
+
+# 2c GOAL: keep only the columns state, obes, and diab
+slim <- select(ob, state, obes, diabetes)
+
+# 2d GOAL: states above the median for BOTH obesity AND diabetes
+both_high <- filter(ob, obes > median(obes) | diab > median(diab))
+
+# PASSCODE: how many states are in both_high?
+nrow(both_high)
+```
+
+<div id="room2-hint-1">
+**Hint 1:** In `filter()`, `=` is not a comparison. R's error message may suggest `==`, but check the `GOAL`. Is "above average" an *equals*?
+</div>
+
+<div id="room2-hint-2">
+**Hint 2:** `|` joins two *complete* conditions. `region == "South" | "West"` is only half a condition. Consider `%in%`. Also check your column names with `names(ob)`.
+</div>
+
+<div id="room2-hint-3">
+**Hint 3:** "BOTH ... AND ..." means every row must satisfy *both* conditions. Which operator is that? Your result should have no more rows than either condition alone.
+</div>
+
+```{r room2-check}
+grade_this({
+  fail_if(same(.result, code2_or) && !same(code2_or, code2),
+          "It runs, but look at 2d: you wanted states above the median on BOTH measures. `|` means *either*.")
+  pass_if(same(.result, code2),
+          "🔓 Vault open! The passcode is the number of states above the median on both measures.")
+  fail("Not the passcode yet. Re-read each GOAL and check that every chunk runs without errors.")
+})
+```
+
+```{r room2-lock}
+passcode_q("**Door 2 keypad.** Enter the passcode:", code2)
+```
+
+### 🚪 Room 3: The Sorting Hall *(4 bugs)*
+
+Rows are scrambled and the pipes are leaking. Fix the `arrange()` and pipe code.
+
+```{r room3-setup, include=FALSE}
+ob <- ob_truth
+```
+
+```{r room3, exercise=TRUE, exercise.setup="room3-setup", exercise.lines=26}
+# 3a GOAL: the 5 states with the HIGHEST obesity rates
+top5 <- ob |>
+  arrange(obes) |>
+  slice_head(n = 5)
+
+# 3b GOAL: all states sorted by diabetes rate, highest first
+by_diab <- ob
+  |> arrange(desc(diab))
+
+# 3c GOAL: the 3 states with the highest diabetes rates
+top3_diab <- ob |>
+  arrange(desc(diab)) |>
+  slice_head(3)
+
+# 3d GOAL: sort by region (A to Z), then by obesity (highest first) within each region
+by_region <- arrange(ob, ("region", "obes"))
+
+# PASSCODE: the two-letter abbreviation (`ab`) of the #1 state in top5
+top5 |> slice_head(n = 1) |> pull(ab)
+```
+
+<div id="room3-hint-1">
+**Hint 1:** What is the default sort direction of `arrange()`? How do you reverse it?
+</div>
+
+<div id="room3-hint-2">
+**Hint 2:** Where is R allowed to break a line when using `|>`? The pipe goes at the *end* of a line, never the start.
+</div>
+
+<div id="room3-hint-3">
+**Hint 3:** `slice_head()` needs a *named* argument. For 3d: column names are bare (no quotes), separated by commas, and the order you list them is the sort priority.
+</div>
+
+```{r room3-check}
+grade_this({
+  by_diab   <- get0("by_diab",   envir = .envir_result)
+  top3_diab <- get0("top3_diab", envir = .envir_result)
+  by_region <- get0("by_region", envir = .envir_result)
+  fail_if(!same(.result, code3),
+          "Not the passcode. Check 3a: is `top5` really the HIGHEST five states?")
+  fail_if(!same(by_diab, arrange(ob_truth, desc(diab))),
+          "3b: `by_diab` should be sorted by diabetes, highest first.")
+  fail_if(!same(top3_diab, slice_head(arrange(ob_truth, desc(diab)), n = 3)),
+          "3c: `top3_diab` should be the three highest diabetes rates.")
+  fail_if(!same(by_region, arrange(ob_truth, region, desc(obes))),
+          "3d: sort by region A to Z, then obesity from highest to lowest within each region.")
+  pass("🔓 Sorted! The passcode is the abbreviation of the state with the highest obesity rate.")
+})
+```
+
+```{r room3-lock}
+passcode_q("**Door 3 keypad.** Enter the two-letter passcode:", code3)
+```
+
+### 🚪 Room 4: The Transformation Chamber *(3 bugs)*
+
+New variables must be created before the door will recognize you. Fix the `mutate()` and `case_when()` code.
+
+```{r room4-setup, include=FALSE}
+ob <- ob_truth
+```
+
+```{r room4, exercise=TRUE, exercise.setup="room4-setup", exercise.lines=30}
+# 4a GOAL: add `ratio` (diab / obes) and `obese_pop` (pop * obes / 100)
+ob2 <- ob |>
+  mutate(ratio = diab / obes)
+  mutate(obese_pop = pop * obes / 100)
+
+# 4b GOAL: add `obes_cat`: "Low" (below 25), "Medium" (25 up to 30), "High" (30 or more)
+ob2 <- ob2 |>
+  mutate(
+    obes_cat = case_when(
+      obes > 20 ~ "Low",
+      obes > 25 ~ "Medium",
+      obes > 30 ~ "High"
+    )
+  )
+
+# 4c GOAL: flag each state as "Above median" or "At or below median" diabetes
+ob2 <- ob2 |>
+  mutate(
+    diab_flag = case_when(
+      diab > median(diab) ~ "Above median",
+      TRUE ~ 0
+    )
+  )
+
+# PASSCODE: how many states are in the "High" obesity category?
+sum(ob2$obes_cat == "High", na.rm = TRUE)
+```
+
+<div id="room4-hint-1">
+**Hint 1:** Look closely at the end of the line after `mutate(ratio = ...)`. What connects the first `mutate()` to the second?
+</div>
+
+<div id="room4-hint-2">
+**Hint 2:** `case_when()` stops at the **first** TRUE. Run `table(ob2$obes_cat, useNA = "ifany")` and look at it. Are the categories sensible? Think about direction (`<` vs `>`) and order.
+</div>
+
+<div id="room4-hint-3">
+**Hint 3:** Every branch of `case_when()` must return the same *type*. You can't mix text and `0`.
+</div>
+
+```{r room4-check}
+grade_this({
+  ob2 <- get0("ob2", envir = .envir_result)
+  fail_if(!same(ob2, ob2_truth),
+          "Your `ob2` doesn't match what the door expects. It should have `ratio`, `obese_pop`, `obes_cat`, and `diab_flag`, with correct categories.")
+  pass_if(same(.result, code4),
+          "🔓 Transformed! The passcode is the number of states with High obesity.")
+  fail("The columns look right but the printed passcode isn't. Did you count the *High* category?")
+})
+```
+
+```{r room4-lock}
+passcode_q("**Door 4 keypad.** Enter the passcode:", code4)
+```
+
+### 🚪 Room 5: The Summary Engine *(4 bugs)*
+
+The engine summarizes states into regions, but its gears are jammed. Fix the `group_by()` and `summarize()` code.
+
+```{r room5-setup, include=FALSE}
+ob2 <- ob2_truth
+```
+
+```{r room5, exercise=TRUE, exercise.setup="room5-setup", exercise.lines=30}
+# 5a GOAL: for each region: average obesity, average diabetes, and number of states
+region_summary <- ob2 |>
+  group_by(region) |>
+  summarize(
+    avg_obes = mean(obes),
+    avg_diab = mean(diab)
+    n_states = n(region)
+  )
+
+# 5b GOAL: population-weighted average obesity for each region
+region_wtd <- ob2 |>
+  group_by(region) |>
+  summarize(wtd_obes = mean(obes * pop))
+
+# 5c GOAL: total population per region, and each region's share of the overall total
+region_pop <- ob2 |>
+  group_by(region) |>
+  summarize(total_pop = sum(pop)) |>
+  mutate(share = pop / sum(total_pop))
+
+# PASSCODE: the region with the highest population-weighted obesity
+region_wtd |> slice_max(wtd_obes, n = 1) |> pull(region)
+```
+
+<div id="room5-hint-1">
+**Hint 1:** Read the error for 5a carefully. Something is missing between two arguments. After that, what does `n()` accept?
+</div>
+
+<div id="room5-hint-2">
+**Hint 2:** Is `mean(obes * pop)` a *weighted mean*? Look for a function built for exactly this. Sanity check: a weighted mean of percentages should still look like a percentage.
+</div>
+
+<div id="room5-hint-3">
+**Hint 3:** After `summarize()`, which columns still exist? `pop` is gone. What did you create instead?
+</div>
+
+```{r room5-check}
+grade_this({
+  region_summary <- get0("region_summary", envir = .envir_result)
+  region_wtd     <- get0("region_wtd",     envir = .envir_result)
+  region_pop     <- get0("region_pop",     envir = .envir_result)
+  fail_if(!same(region_summary, region_summary_truth),
+          "5a: `region_summary` should have `region`, `avg_obes`, `avg_diab`, `n_states`.")
+  fail_if(!same(region_wtd, region_wtd_truth),
+          "5b: that isn't a population-weighted mean. Try `weighted.mean(obes, pop)`.")
+  fail_if(!same(region_pop, region_pop_truth),
+          "5c: `region_pop` should have `region`, `total_pop`, and `share` (total_pop divided by the grand total).")
+  pass_if(same(.result, code5), "🔓 The engine hums to life. Enter the passcode below.")
+  fail("Not the passcode. It should be the region name with the highest weighted obesity.")
+})
+```
+
+```{r room5-lock}
+passcode_q("**Door 5 keypad.** Enter the region name:", code5)
+```
+
+### 🚪 Room 6: The Records Archive *(4 bugs, and not all are in the join code!)*
+
+Two tables must be merged: the state data and a small lookup table of coastal states. The archivist was in a hurry.
+
+```{r room6-setup, include=FALSE}
+ob2 <- ob2_truth
+state_info <- state_info_dup
+```
+
+```{r room6, exercise=TRUE, exercise.setup="room6-setup", exercise.lines=28}
+# The lookup table `state_info` is already loaded. Take a look at it.
+state_info
+
+# 6a GOAL: add the `coastal` column to ob2
+ob_joined <- left_join(ob2, state_info, by = "ab")
+
+# 6b GOAL: keep ALL 51 states, with NA for `coastal` where we have no info
+ob_joined <- inner_join(ob2, state_info, by = c("ab" = "state_abbr"))
+nrow(ob_joined)   # should be 51
+
+# 6c GOAL: which rows of state_info have NO match in ob2? (we expect PR)
+unmatched <- anti_join(ob2, state_info, by = c("ab" = "state_abbr"))
+
+# PASSCODE: how many coastal states are in ob_joined?
+sum(ob_joined$coastal, na.rm = TRUE)
+```
+
+<div id="room6-hint-1">
+**Hint 1:** The two tables name their key column differently. How do you tell a join that `ab` in the left table matches `state_abbr` in the right one?
+</div>
+
+<div id="room6-hint-2">
+**Hint 2:** Which join keeps every row of the *left* table even when there's no match? And check `nrow()` after fixing it. Is it really 51?
+</div>
+
+<div id="room6-hint-3">
+**Hint 3:** Look at `state_info` closely. Does any state appear twice? (Try `count(state_info, state_abbr)`.) For 6c, `anti_join(x, y)` keeps rows of **x** with no match in **y**. Which table do you want rows from?
+</div>
+
+```{r room6-check}
+grade_this({
+  ob_joined <- get0("ob_joined", envir = .envir_result)
+  unmatched <- get0("unmatched", envir = .envir_result)
+  fail_if(!same(nrow(ob_joined), nrow(ob_truth)),
+          "`ob_joined` should have exactly one row per state (51). Check the join type and look for duplicate keys in the lookup table.")
+  fail_if(!same(unmatched$state_abbr, "PR"),
+          "6c: `unmatched` should list the lookup-table row(s) with no match in the state data (PR).")
+  pass_if(same(.result, code6), "🔓 Records merged! Enter the passcode below.")
+  fail("The joined table looks right but the passcode isn't. Is the lookup table free of duplicates?")
+})
+```
+
+```{r room6-lock}
+passcode_q("**Door 6 keypad.** Enter the passcode:", code6)
+```
+
+### 🚪 Room 7: The Long Corridor *(3 bugs)*
+
+The data is too wide to fit through the door. Stretch it into long format with `pivot_longer()`.
+
+```{r room7-setup, include=FALSE}
+ob <- ob_truth
+```
+
+```{r room7, exercise=TRUE, exercise.setup="room7-setup", exercise.lines=20}
+# 7a GOAL: one row per state per measure. We want a `measure` column ("diab" or "obes")
+#          and a `rate` column. State, ab, region, and pop should stay as they are.
+ob_long <- pivot_longer(ob, cols = diab:pop, names_to = measure, values_to = "rate")
+dim(ob_long)   # should be 102 rows and 6 columns
+
+# 7b GOAL: count the obesity readings that are above 30
+n_high <- ob_long |>
+  filter(measure == "obesity", rate > 30) |>
+  nrow()
+
+# PASSCODE: total rows in ob_long plus n_high
+nrow(ob_long) + n_high
+```
+
+<div id="room7-hint-1">
+**Hint 1:** `diab:pop` selects every column *between* `diab` and `pop`. Which columns is that? Can numbers and text share one `rate` column? Also: are new column names written as strings or bare names?
+</div>
+
+<div id="room7-hint-2">
+**Hint 2:** After pivoting, run `distinct(ob_long, measure)` to see the exact labels stored in the `measure` column.
+</div>
+
+```{r room7-check}
+grade_this({
+  ob_long <- get0("ob_long", envir = .envir_result)
+  n_high  <- get0("n_high",  envir = .envir_result)
+  fail_if(!same(ob_long, ob_long_truth),
+          "`ob_long` should have columns state, ab, region, pop, measure, rate (102 rows). Only `diab` and `obes` should be pivoted.")
+  fail_if(!same(n_high, sum(ob_long_truth$measure == "obes" & ob_long_truth$rate > 30)),
+          "7b: `n_high` isn't right. What labels does the `measure` column actually contain?")
+  pass_if(same(.result, code7), "🔓 The corridor stretches out. Enter the passcode.")
+  fail("Not the passcode. Add the total rows of `ob_long` to `n_high`.")
+})
+```
+
+```{r room7-lock}
+passcode_q("**Door 7 keypad.** Enter the passcode:", code7)
+```
+
+### 🚪 Room 8: The Widening Chamber *(3 bugs)*
+
+Now do the opposite: take long data and make it wide with `pivot_wider()`.
+
+```{r room8-setup, include=FALSE}
+ob <- ob_truth
+ob_long <- ob_long_truth
+```
+
+```{r room8, exercise=TRUE, exercise.setup="room8-setup", exercise.lines=24}
+# 8a GOAL: average each measure by region, then widen to ONE row per region
+#          with a `diab` column and an `obes` column
+region_long <- ob_long |>
+  group_by(region, measure) |>
+  summarize(avg = mean(rate), .groups = "drop")
+
+region_wide <- pivot_wider(region_long, names_from = avg, values_from = measure)
+
+# 8b GOAL: round trip. Widen ob_long back to one row per state (should have 51 rows)
+ob_back <- pivot_wider(ob_long, names_from = measure, values_from = rate, id_cols = region)
+nrow(ob_back)
+
+# PASSCODE: the highest regional average obesity, rounded to 1 decimal
+round(max(region_wide$obes), 1)
+```
+
+<div id="room8-hint-1">
+**Hint 1:** `names_from` is the column whose *values* become the new column **names**. `values_from` is the column whose values fill the cells. Did you swap them?
+</div>
+
+<div id="room8-hint-2">
+**Hint 2:** For 8b, `id_cols` says which columns identify a row. Is `region` enough to identify one state? Read the warning R gives you. By default, `pivot_wider()` uses *all other columns* as the identifier.
+</div>
+
+```{r room8-check}
+grade_this({
+  region_wide <- get0("region_wide", envir = .envir_result)
+  ob_back     <- get0("ob_back",     envir = .envir_result)
+  fail_if(!same(region_wide, region_wide_truth),
+          "8a: `region_wide` should have one row per region with `diab` and `obes` columns.")
+  fail_if(!same(nrow(ob_back), nrow(ob_truth)) || any(vapply(ob_back, is.list, logical(1))),
+          "8b: `ob_back` should have one row per state and no list-columns. Is `id_cols = region` enough to identify each state?")
+  pass_if(same(.result, code8), "🔓 The chamber widens. Enter the passcode.")
+  fail("Not the passcode. It's the highest regional average obesity, rounded to one decimal.")
+})
+```
+
+```{r room8-lock}
+passcode_q("**Door 8 keypad.** Enter the passcode:", code8,
+           extra = sprintf("%.1f", code8))
+```
+
+### 🚪 Room 9: The Exit Gallery *(6 bugs)*
+
+One last room: five broken charts hang on the wall. Fix them all to reveal the final passcode. It is written on the **tallest bar of chart 3**.
+
+```{r room9-setup, include=FALSE}
+ob2 <- ob2_truth
+region_summary <- region_summary_truth
+```
+
+```{r room9, exercise=TRUE, exercise.setup="room9-setup", exercise.lines=40}
+# 9a GOAL: scatterplot of obesity (x) vs diabetes (y), points colored by region
+p1 <- ggplot(ob2, aes(x = obes, y = diab), color = region) +
+  geom_point()
+
+# 9b GOAL: boxplot of obesity by region
+p2 <- ggplot(ob2, aes(x = region, y = obes))
+  + geom_boxplot()
+
+# 9c GOAL: bar chart of average obesity by region (using the summary table)
+p3 <- ggplot(region_summary, aes(x = region, y = avg_obes)) +
+  geom_bar()
+
+# 9d GOAL: scatterplot with every point colored steelblue
+p4 <- ggplot(ob2, aes(x = obes, y = diab, color = "steelblue")) +
+  geom_point()
+
+# 9e GOAL: histogram of obesity, one panel per region, with a title and clear axis labels
+p5 <- ggplot(ob2, aes(x = obes)) +
+  geom_histogram(binwidth = 2) +
+  facet_wrap(region) +
+  labs(
+    title = "Obesity prevalence by region",
+    x = Obesity rate (%),
+    y = "Number of states"
+  )
+
+# Display all five charts
+p1; p2; p3; p4; p5
+```
+
+<div id="room9-hint-1">
+**Hint 1:** (9a, 9d) Where does `color` belong when it should *vary with the data*? Where does it belong when it is *one fixed value*?
+</div>
+
+<div id="room9-hint-2">
+**Hint 2:** (9b) A line may not *start* with `+`. (9c) `geom_bar()` counts rows by default. Your data is already summarized. What's the tidy fix?
+</div>
+
+<div id="room9-hint-3">
+**Hint 3:** (9e) Facet formulas start with `~`, and axis labels are text, so they need quotes.
+</div>
+
+```{r room9-check}
+grade_this({
+  p1 <- get0("p1", envir = .envir_result); p2 <- get0("p2", envir = .envir_result)
+  p3 <- get0("p3", envir = .envir_result); p4 <- get0("p4", envir = .envir_result)
+  p5 <- get0("p5", envir = .envir_result)
+
+  maps <- function(p) c(names(p$mapping), names(p$layers[[1]]$mapping))
+  fail_if(!("colour" %in% maps(p1)),
+          "9a: `color = region` needs to be *inside* `aes()` for the points to be colored by region.")
+  fail_if(!inherits(p2$layers[[1]]$geom, "GeomBoxplot"),
+          "9b: the boxplot layer isn't attached to the plot. Check where your `+` is.")
+  fail_if(!(inherits(p3$layers[[1]]$geom, "GeomBar") && inherits(p3$layers[[1]]$stat, "StatIdentity")),
+          "9c: the bars should use the values already in the data (`geom_col()` or `stat = \"identity\"`).")
+  fail_if("colour" %in% maps(p4) || !same(p4$layers[[1]]$aes_params$colour, "steelblue"),
+          "9d: a *fixed* color belongs *outside* `aes()`, e.g., `geom_point(color = \"steelblue\")`.")
+  fail_if(!inherits(p5$facet, "FacetWrap"),
+          "9e: facet with a formula, like `facet_wrap(~ region)`.")
+  fail_if(!is.character(p5$labels$x) || !is.character(p5$labels$title),
+          "9e: your `labs()` needs a title and an x-axis label written as text.")
+  pass("🔓 All five charts restored! Read the tallest bar of chart 3 and enter the final passcode.")
+})
+```
+
+```{r room9-lock}
+passcode_q("**FINAL DOOR.** Which region has the tallest bar in chart 3?", code9)
+```
+
+### 🎉 You Escaped!
+
+The alarms fall silent. The red lights fade to white. Daylight pours through the door you just unlocked.
+
+You fixed bugs in **loading, filtering, selecting, sorting, piping, mutating, grouping, summarizing, joining, pivoting, and plotting**, and every lock along the way needed an answer from your own code.
+
+**Debrief questions** (discuss with your group):
+
+1. Which bugs were obvious from the error message? Which ones ran silently but gave a wrong answer? What clued you in?
+2. What quick checks (`nrow()`, `table()`, `dim()`, `summary()`, a glance at a plot legend) would have caught the silent bugs earlier?
+3. Several bugs came from a line *starting* with `|>` or `+`. What is the rule?
+4. One bug lived in the **data**, not the code (a duplicated row in a lookup table). How could you have found it without being told?
