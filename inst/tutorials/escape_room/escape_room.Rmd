@@ -19,21 +19,17 @@ gradethis_setup()
 # If it is missing, a stand-in file with the same six columns is created so the
 # tutorial still runs (for testing only; the passcodes depend on the data used).
 # ------------------------------------------------------------------------------
-ob_file <- "obesity_diabetes.xlsx"
-if (!file.exists(ob_file)) {
-  set.seed(42)
-  reg   <- c(as.character(state.region), "South")
-  reg[reg == "North Central"] <- "Midwest"
-  base  <- unname(c(Northeast = 29, Midwest = 32, South = 33, West = 27)[reg])
-  obes  <- round(base + rnorm(51, 0, 2.5), 1)
-  diab  <- round(4 + 0.20 * obes + rnorm(51, 0, 0.8), 1)
-  pop   <- round(c(unname(state.x77[, "Population"]) * 1000, 690000))
-  writexl::write_xlsx(
-    tibble(state = c(state.name, "District of Columbia"), ab = c(state.abb, "DC"),
-           diab = diab, obes = obes, region = reg, pop = pop),
-    ob_file
+# Locate the dataset alongside this tutorial
+ob_file <- system.file(
+  "tutorials", "escape_room", "obesity_diabetes.xlsx",
+  package = "DASCI150EscapeRoom"
+)
+
+if (ob_file == "") {
+  stop(
+    "Cannot find obesity_diabetes.xlsx in the installed package. ",
+    "Check that it is in inst/tutorials/escape_room/."
   )
-  message("obesity_diabetes.xlsx not found: created a STAND-IN file for testing.")
 }
 
 # ------------------------------------------------------------------------------
