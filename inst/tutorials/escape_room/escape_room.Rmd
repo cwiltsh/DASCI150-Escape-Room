@@ -21,16 +21,12 @@ gradethis_setup()
 # ------------------------------------------------------------------------------
 # Locate the dataset alongside this tutorial
 ob_file <- system.file(
-  "tutorials", "escape_room", "obesity_diabetes.xlsx",
+  "tutorials", "escape_room", "data",
+  "obesity_diabetes.xlsx",
   package = "DASCI150EscapeRoom"
 )
 
-if (ob_file == "") {
-  stop(
-    "Cannot find obesity_diabetes.xlsx in the installed package. ",
-    "Check that it is in inst/tutorials/escape_room/."
-  )
-}
+stopifnot(nzchar(ob_file))
 
 # ------------------------------------------------------------------------------
 # "TRUTH" OBJECTS AND PASSCODES (computed from the data; used only for grading)
